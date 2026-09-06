@@ -8,6 +8,13 @@ Prioritized, practical hardening steps for a freshly bought Linux VPS (Ubuntu/De
 
 Do these first so a misconfiguration doesn't strand you.
 
+### 0. Setup ssh
+
+### 1. Generate keypair / copy public key to a VPS
+
+ssh-keygen -a 100 -t ed25519 -f ~/.ssh/id_ed25519_vps_secure -C "dmikhailov@vps"
+ssh-copy-id -i ~/.ssh/id_ed25519_vps_secure.pub root@your_vps_ip
+
 ### 1. Take a snapshot / backup
 
 - Use your VPS provider's snapshot feature before making SSH/firewall changes.
@@ -18,7 +25,7 @@ Do these first so a misconfiguration doesn't strand you.
 From your local machine:
 
 ```bash
-ssh -i ~/.ssh/your_key user@your_vps_ip
+ssh -i ~/.ssh/id_ed25519_vps_secure vps@your_vps_ip
 ```
 
 Confirm it works without a password.
@@ -33,13 +40,13 @@ Confirm it works without a password.
 
 ```bash
 # On the VPS (as root initially)
-adduser deploy
-usermod -aG sudo deploy        # Debian/Ubuntu
+adduser vps_user
+usermod -aG sudo vps_user        # Debian/Ubuntu
 # For CentOS/RHEL/Fedora:
-# usermod -aG wheel deploy
+# usermod -aG wheel vps_user
 
 # Test from another terminal:
-ssh -i ~/.ssh/your_key deploy@your_vps_ip
+ssh -i ~/.ssh/id_ed25519_vps_secure vps_user@your_vps_ip
 ```
 
 Then in `/etc/ssh/sshd_config`:

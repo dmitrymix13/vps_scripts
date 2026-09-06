@@ -39,6 +39,34 @@ ssh -i ~/.ssh/id_ed25519_vps_secure vps@your_vps_ip
 
 Confirm it works without a password.
 
+### 4. Pre-flight status check
+
+Read-only snapshot of what the server already has, so you can skip anything already done:
+
+```bash
+# OS release and kernel
+. /etc/os-release && echo "$PRETTY_NAME"
+
+# SSH listening port + effective sshd settings
+sudo ss -tlnp | grep ssh
+sudo sshd -T | grep -Ei 'permitrootlogin|passwordauth|kbdinteractive|authenticationmethods|pubkeyauthentication|port ' | sort -u
+
+# Firewall
+sudo ufw status verbose
+
+# Fail2ban
+systemctl is-active fail2ban;  sudo fail2ban-client status 2>/dev/null
+
+# Automatic updates
+dpkg -l unattended-upgrades 2>/dev/null | tail -1
+
+# Kernel hardening values
+sudo sysctl net.ipv4.tcp_syncookies kernel.randomize_va_space fs.protected_symlinks net.ipv4.conf.all.rp_filter
+
+# Time sync
+systemctl is-active chrony systemd-timesyncd
+```
+
 ---
 
 ## Tier 1 – Must‑do (highest impact, low effort)
@@ -115,6 +143,7 @@ AllowAgentForwarding no
 AllowTcpForwarding no
 X11Forwarding no
 PermitEmptyPasswords no
+PermitUserEnvironment no
 ```
 
 Validate syntax before restart:
@@ -123,6 +152,35 @@ Validate syntax before restart:
 sudo sshd -t
 sudo systemctl restart sshd
 ```
+
+#### Recommended: use a drop-in file instead of editing `sshd_config`
+
+Ubuntu 22.04+/Debian 11+/OpenSSH ≥8.2 include `/etc/ssh/sshd_config.d/*.conf`. A drop-in survives `openssh-server` package updates that rewrite the main file (first value wins, so it overrides defaults):
+
+```bash
+sudo tee /etc/ssh/sshd_config.d/99-hardening.conf > /dev/null <<'EOF'
+# Consolidated steps 1-3
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+PermitEmptyPasswords no
+PermitUserEnvironment no
+AllowAgentForwarding no
+AllowTcpForwarding no
+X11Forwarding no
+MaxAuthTries 3
+MaxStartups 10:30:60
+LoginGraceTime 60
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256
+EOF
+sudo sshd -t
+```
+
+If `sshd -t` passes, restart and test from a **second terminal** before closing your current one.
 
 ---
 
@@ -140,8 +198,8 @@ sudo apt install ufw
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
 
-# Allow SSH (adjust port if you change it later)
-sudo ufw allow 22/tcp          # or 2222/tcp if you changed port
+# Allow SSH (use `limit` to rate-limit brute force; adjust port if you changed it)
+sudo ufw limit ssh/tcp       # or `sudo ufw allow 2222/tcp` if you changed port
 
 # Allow web/mail/etc as needed
 # sudo ufw allow 80/tcp
@@ -448,6 +506,12 @@ If you use chrony, disable `systemd-timesyncd` first to avoid conflict:
 sudo systemctl disable --now systemd-timesyncd
 ```
 
+Verify sync:
+
+```bash
+chronyc tracking | head -4
+```
+
 Ensure logs are retained and rotated:
 
 ```bash
@@ -562,6 +626,25 @@ If you control clients too:
 
 ---
 
+## Post-hardening verification
+
+Run this sweep to confirm everything stuck:
+
+```bash
+echo "== sshd =="
+sudo sshd -T | grep -Ei 'permitrootlogin|passwordauth|kbdinteractive|authenticationmethods|pubkeyauthentication'
+echo "== firewall =="
+sudo ufw status verbose
+echo "== fail2ban =="
+sudo fail2ban-client status sshd
+echo "== kernel =="
+sudo sysctl net.ipv4.tcp_syncookies kernel.randomize_va_space fs.protected_symlinks net.ipv4.conf.all.rp_filter
+```
+
+Expected: `PermitRootLogin no`, `passwordauthentication no`, `authenticationmethods publickey`; UFW `Status: active`; fail2ban `Number of currently failed: 0`; sysctl values `1 / 2 / 1 / 1`.
+
+---
+
 ## Suggested order of operations (safe sequence)
 
 1. Snapshot VPS.  
@@ -579,3 +662,5 @@ If you control clients too:
 10. Add backups, integrity checks, and optional honeypots/IDS.
 
 If you tell me your distro (Ubuntu/Debian/CentOS/etc.) and main services (web, DB, etc.), I can give you a tailored, copy‑pasteable hardening script.
+
+Everything above is also automated in [`scripts/security_setup_base.sh`](../scripts/security_setup_base.sh) — same order, idempotent, backs up configs before touching them, and won't restart SSH unless you pass `--apply-ssh`.

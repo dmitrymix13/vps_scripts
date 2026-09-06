@@ -20,7 +20,16 @@ ssh-copy-id -i ~/.ssh/id_ed25519_vps_secure.pub root@your_vps_ip
 - Use your VPS provider's snapshot feature before making SSH/firewall changes.
 - Keep console/VNC access enabled in the control panel.
 
-### 2. Test SSH key login before disabling passwords
+### 2. Patch the system first (before hardening)
+
+```bash
+sudo apt update && sudo apt full-upgrade -y && sudo apt autoremove -y
+sudo reboot
+```
+
+Also update installed snapshot/CVE-critical packages on RHEL-family with `sudo dnf upgrade`.
+
+### 3. Test SSH key login before disabling passwords
 
 From your local machine:
 
@@ -47,6 +56,10 @@ usermod -aG sudo vps_user        # Debian/Ubuntu
 
 # Test from another terminal:
 ssh -i ~/.ssh/id_ed25519_vps_secure vps_user@your_vps_ip
+
+# Verify/fix SSH file permissions on the VPS:
+ssh -i ~/.ssh/id_ed25519_vps_secure vps_user@your_vps_ip \
+  'chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'
 ```
 
 Then in `/etc/ssh/sshd_config`:
@@ -68,8 +81,8 @@ In `/etc/ssh/sshd_config`:
 ```conf
 PubkeyAuthentication yes
 PasswordAuthentication no
-ChallengeResponseAuthentication no
-UsePAM no
+KbdInteractiveAuthentication no
+AuthenticationMethods publickey
 ```
 
 Reload:
@@ -266,7 +279,7 @@ Create `/etc/fail2ban/jail.local` (don't edit `jail.conf` directly):
 bantime = 3600
 findtime = 600
 maxretry = 5
-banaction = ufw      # or firewall-cmd for firewalld
+banaction = nftables      # or firewall-cmd for firewalld
 
 [sshd]
 enabled = true
@@ -311,6 +324,20 @@ net.ipv4.icmp_echo_ignore_broadcasts = 1
 # Log suspicious packets
 net.ipv4.conf.all.log_martians = 1
 net.ipv4.conf.default.log_martians = 1
+
+# Anti-spoofing (reverse path filtering) and SYN flood protection
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.tcp_syncookies = 1
+
+# ASLR and reduce kernel info leaks
+kernel.randomize_va_space = 2
+kernel.kptr_restrict = 1
+kernel.dmesg_restrict = 1
+
+# Prevent symlink/hardlink attacks
+fs.protected_hardlinks = 1
+fs.protected_symlinks = 1
 
 # Disable IPv6 if not used (optional)
 # net.ipv6.conf.all.disable_ipv6 = 1
@@ -413,6 +440,12 @@ Enable `systemd-timesyncd` or `chrony`:
 ```bash
 sudo apt install chrony
 sudo systemctl enable --now chrony
+```
+
+If you use chrony, disable `systemd-timesyncd` first to avoid conflict:
+
+```bash
+sudo systemctl disable --now systemd-timesyncd
 ```
 
 Ensure logs are retained and rotated:

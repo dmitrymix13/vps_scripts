@@ -246,7 +246,7 @@ Port 2222
 3. Restart SSH and test from a **new** terminal:
 
 ```bash
-ssh -p 2222 -i ~/.ssh/your_key deploy@your_vps_ip
+ssh -p 2222 -i ~/.ssh/your_key vps_user@your_vps_ip
 ```
 
 If OK, remove `Port 22` from `sshd_config` and restart again.
@@ -465,7 +465,7 @@ Consider remote log shipping (e.g., to a separate server or S3‑compatible stor
 Edit `/etc/sudoers` with `visudo`:
 
 ```conf
-deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx
+vps_user ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx
 ```
 
 Avoid blanket `NOPASSWD: ALL` unless absolutely necessary. Use per‑command rules where possible.

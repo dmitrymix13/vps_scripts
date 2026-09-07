@@ -672,6 +672,49 @@ Notes:
 
 ---
 
+### 20. Swap / memory headroom
+
+**Why:** On small VPSes (1 GB RAM is common), swap prevents OOM-kills when ClamAV scans or Xray bursts. Size guidance for a 1-core / 1 GB RAM / 10 GB disk box: **1–2 GB** (2 GB recommended; below 1 GB isn't worth it, and don't eat more than ~20% of your disk).
+
+Check current state:
+
+```bash
+free -h
+swapon --show
+```
+
+Set up a swapfile if none exists:
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# keep swap for emergencies rather than active use:
+echo 'vm.swappiness = 10' | sudo tee /etc/sysctl.d/99-swap.conf
+sudo sysctl --system
+```
+
+> If `fallocate` isn't supported on the filesystem (e.g. errors), use `sudo dd if=/dev/zero of=/swapfile bs=1M count=2048` instead.
+
+Resize an existing swapfile (swap can't be resized in place — recreate it; `/etc/fstab` needs no edits since the path is unchanged):
+
+```bash
+sudo swapoff -a
+sudo rm -f /swapfile
+sudo fallocate -l 2G /swapfile                 # new size
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+swapon --show
+```
+
+> If `swapoff -a` fails because RAM is too full to hold the swap contents, run it during a quiet window (stop ClamAV scan first) or temporarily increase size from a snapshot.
+
+---
+
 ## Post-hardening verification
 
 Run this sweep to confirm everything stuck:

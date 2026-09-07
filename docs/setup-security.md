@@ -626,6 +626,52 @@ If you control clients too:
 
 ---
 
+### 19. Malware scanning (ClamAV)
+
+**Why:** Proxy/VPN servers relay untrusted traffic and can silently host malicious uploads; a background scanner catches known malware before it spreads.
+
+Install and start the daemon + signature updater:
+
+```bash
+sudo apt install -y clamav clamav-daemon
+sudo systemctl enable --now clamav-freshclam clamav-daemon
+sudo freshclam                      # pull signatures immediately (first run takes a few minutes)
+```
+
+Enable useful logging in `/etc/clamav/clamd.conf`:
+
+```conf
+LogTime true
+LogRotate true
+```
+
+Then `sudo systemctl restart clamav-daemon`. Monitor:
+
+```bash
+sudo journalctl -u clamav-daemon -f        # follow daemon logs (systemd)
+sudo journalctl -u clamav-freshclam -f     # signature updates
+sudo tail -f /var/log/clamav/clamav.log    # file log if configured
+sudo clamdscan /etc/hosts                   # sanity check that scanning works
+```
+
+Scheduled full-disk scan (weekly, daemon already running):
+
+```bash
+sudo tee /etc/cron.daily/clamscan > /dev/null <<'EOF'
+#!/bin/sh
+clamdscan --quiet --exclude-dir=/proc --exclude-dir=/sys --exclude-dir=/dev --exclude-dir=/run --exclude-dir=/boot /
+EOF
+sudo chmod +x /etc/cron.daily/clamscan
+```
+
+Notes:
+
+- 3x-ui/Xray and scanned uploads live under `/var/lib/xray` or your config dirs — add an explicit `clamdscan` on them if you want tighter coverage.
+- ClamAV costs ~300–500 MB RAM and noticeable CPU on scans; on a small VPS prefer `clamdscan` (daemon) over one-shot `clamscan` and schedule scans off-peak.
+- On-access scanning (`OnAccessPrevention`) requires fanotify kernel support and can interfere with active transfer workloads — leave it off for a proxy box.
+
+---
+
 ## Post-hardening verification
 
 Run this sweep to confirm everything stuck:
@@ -659,7 +705,7 @@ Expected: `PermitRootLogin no`, `passwordauthentication no`, `authenticationmeth
 7. Install Fail2Ban/CrowdSec.  
 8. Apply sysctl hardening, disable unused services.  
 9. Enable AppArmor/SELinux enforcing, set up logging/monitoring.  
-10. Add backups, integrity checks, and optional honeypots/IDS.
+10. Add backups, integrity checks, malware scanning (ClamAV), and optional honeypots/IDS.
 
 If you tell me your distro (Ubuntu/Debian/CentOS/etc.) and main services (web, DB, etc.), I can give you a tailored, copy‑pasteable hardening script.
 

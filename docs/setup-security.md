@@ -140,7 +140,7 @@ MaxAuthTries 3
 MaxStartups 10:30:60
 LoginGraceTime 60
 AllowAgentForwarding no
-AllowTcpForwarding no
+AllowTcpForwarding local    # keep -L local tunnels working; `-R` remote forwarding still off
 X11Forwarding no
 PermitEmptyPasswords no
 PermitUserEnvironment no
@@ -168,7 +168,7 @@ PubkeyAuthentication yes
 PermitEmptyPasswords no
 PermitUserEnvironment no
 AllowAgentForwarding no
-AllowTcpForwarding no
+AllowTcpForwarding local    # keep -L local tunnels working; `-R` remote forwarding still off
 X11Forwarding no
 MaxAuthTries 3
 MaxStartups 10:30:60
@@ -714,6 +714,105 @@ swapon --show
 > If `swapoff -a` fails because RAM is too full to hold the swap contents, run it during a quiet window (stop ClamAV scan first) or temporarily increase size from a snapshot.
 
 ---
+
+### 21. VLESS VPN via 3x-ui (Xray)
+
+**Why:** 3x-ui is a web panel that manages a VLESS/Xray proxy. It is a high-value public target with a history of CVEs — the panel itself is the weak point, not Xray. This section is the "tuning" companion to the rest of the checklist for a proxy box.
+
+#### 21.1 Install 3x-ui and verify
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+sudo systemctl status x-ui --no-pager
+```
+
+> `curl | bash` of a third-party script is inherently trusting — run it on a fresh box, right after your snapshot. State lives in `/usr/local/x-ui` (binaries) and `/etc/x-ui/x-ui.db` (config, users, inbounds), path varies by 3x-ui version; some builds use `/etc/3x-ui/`).
+
+#### 21.2 Harden the panel immediately (do this before adding users)
+
+3x-ui listens on **0.0.0.0** — the firewall is what protects it:
+
+```bash
+# fix default admin/admin password via CLI:
+sudo x-ui              # → Panel settings → change username/password
+```
+
+Then in **Panel Settings** (web UI):
+
+- Set a **strong random panel password** (not `admin`).
+- Set a **non-default web base path** (URI path) — e.g. `/xui-x-#7k2` — so the login page isn't at the well-known `/`.
+- Set the panel port to a high random value (e.g. `55123`) and keep the UFW rule in sync.
+- Pick your inbounds: prefer a **single VLESS inbound on 443 with TLS** (Reality or WebSocket+TLS) to minimize the listening surface; avoid opening many proxy ports.
+
+#### 21.3 UFW rules for the proxy
+
+**Configure UFW *before* running the installer.** With default-deny already active, whatever 3x-ui binds (panel port, xray ports) is unreachable until a rule exists — this closes the window between install finishing and you changing the default `admin` credentials. If you plan SSH-tunnel-only panel access, add no panel rule at all.
+
+```bash
+# VLESS+TLS + optional HTTP fallback:
+sudo ufw allow 443/tcp
+sudo ufw allow 80/tcp               # only if you use a redirect/fallback site
+
+# Everything else stays default-deny:
+sudo ufw status verbose
+```
+
+Prefer the **SSH-tunnel only** approach for the panel and delete the panel rule entirely — then 0.0.0.0:55123 is unreachable from the Internet:
+
+```bash
+ssh -N -L :55123:localhost:55123 vps_user@your_vps_ip
+# open http://127.0.0.1:55123 locally
+```
+
+#### 21.4 TLS certificate: generate + install (Let's Encrypt via acme.sh)
+
+A real, trusted cert is required for VLESS+WS+TLS to terminate TLS properly (Reality/self-signed won't do). Prereqs: the domain's A record points to the VPS and port 80 is open for the HTTP-01 challenge.
+
+```bash
+# 1. Issue an ECDSA cert (standalone temporarily binds :80)
+/root/.acme.sh/acme.sh --issue -d your-domain.com \
+  --standalone --keylength ec-256 --server letsencrypt
+
+# 2. Install into a stable, x-ui-readable path + auto-restart x-ui on renewal
+sudo mkdir -p /usr/local/x-ui/bin/cert
+/root/.acme.sh/acme.sh --install-cert -d your-domain.com --ecc \
+  --key-file       /usr/local/x-ui/bin/cert/your-domain.com.key \
+  --fullchain-file /usr/local/x-ui/bin/cert/your-domain.com.fullchain \
+  --reloadcmd "systemctl restart x-ui"
+```
+
+Verify files + that the server serves them:
+
+```bash
+sudo ls -la /usr/local/x-ui/bin/cert/
+echo | openssl s_client -connect your_vps_ip:443 -servername your-domain.com 2>&1 \
+  | grep -E "subject=|issuer=|Verify return"
+# expect: CN=your-domain.com, issuer Let's Encrypt, "Verify return code: 0 (ok)"
+```
+
+#### 21.5 Point 3x-ui at the cert + gotchas that actually made it work
+
+In 3x-ui, edit the **port-443 VLESS inbound → Transport tab**:
+
+- **Network**: `ws` (WebSocket) · **Path**: `/asdfv` · **Host**: your-domain.com
+- **Security**: `TLS` (NOT Reality) · **Server name (SNI)**: your-domain.com · ALPN: `h2, http/1.1`
+- **Certificates → Public Key File**: `/usr/local/x-ui/bin/cert/your-domain.com.fullchain`
+- **Certificates → Private Key File**:  `/usr/local/x-ui/bin/cert/your-domain.com.key`
+
+Gotchas that caused the long "timeouts / unrecognized name" hunt:
+
+1. **The 3x-ui cert field must be a real cert chain (`.fullchain`/`.cer`/`.pem`), never a `.csr`.** A `.csr` (signing request) breaks TLS silently → timeouts.
+2. **`config.json` is regenerated from 3x-ui's SQLite DB** (`/usr/local/x-ui/bin/config.json`). Don't hand-edit it; Xray hot-applies changes from the DB on panel Save, so an on-disk `config.json` can look stale even when the live config is fine.
+3. **Keep client/server in sync**: matching UUID, port 443, and correct client `server` address (a `localhost` typo = pure timeouts). **Disable ECH in the Hiddify client** — Xray has no ECH, so an ECH-enabled client breaks the handshake.
+4. **Verify listeners + TLS after each change**:
+   ```bash
+   sudo ss -tlnp | grep 443          # proxy actually listening?
+   curl -sk -o /dev/null -w "%{http_code}\n" "https://your-domain.com/asdfv" \
+     -H "Connection: Upgrade" -H "Upgrade: websocket" \
+     -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=="
+   # HTTP 400 = Xray WS endpoint alive (rejects the non-VLESS handshake — expected)
+   ```
+5. **Reality vs WS+TLS under DPI**: a byte-identical Reality config failed here (timeouts / "reality verification failed") — classic ISP/ТСПУ probing. **VLESS+WS+TLS direct to the VPS worked** where Reality didn't. Hiding the VPS IP from DPI would need the domain behind Cloudflare CDN, which requires delegating nameservers (mooo.com / free VDSina domains usually can't).
 
 ## Post-hardening verification
 

@@ -862,7 +862,7 @@ systemctl is-enabled apt-daily.timer apt-daily-upgrade.timer
 tail -3 /var/log/unattended-upgrades/unattended-upgrades.log
 ```
 
-Expected: `PermitRootLogin no`, `passwordauthentication no`, `authenticationmethods publickey`; UFW `Status: active`; fail2ban `Number of currently failed: 0`; sysctl values `1 / 2 / 1 / 1`.
+Expected: `PermitRootLogin no`, `passwordauthentication no`, `authenticationmethods publickey`; UFW `Status: active`; fail2ban `Number of currently failed: 0`; sysctl values `1 / 2 / 1 / 1`; auto-update timers `enabled` and a recent entry in the unattended-upgrades log.
 
 ---
 

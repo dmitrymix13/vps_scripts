@@ -260,6 +260,36 @@ Test dry‑run:
 sudo unattended-upgrade --dry-run
 ```
 
+**Verify the triggers are armed (common gotcha).** On Ubuntu, unattended-upgrades only runs because the `apt-daily.timer` / `apt-daily-upgrade.timer` systemd timers invoke it. Hardening tooling (lynis, provider scripts, etc.) frequently **disables both timers**, which leaves the config looking enabled while auto-update silently never runs — lynis flags this (e.g. `unattended-upgrades.service ... [ UNSAFE ]`).
+
+Check:
+
+```bash
+systemctl is-enabled apt-daily.timer apt-daily-upgrade.timer   # want: enabled
+systemctl list-timers --all | grep apt-daily                   # want: active timers with Next elapse
+tail -5 /var/log/unattended-upgrades/unattended-upgrades.log   # want: recent daily runs, not one entry from install day
+```
+
+A single log entry from the install/provision date and 41+ pending upgrades (`apt-get -s upgrade`) is the signature of dead timers. Fix:
+
+```bash
+sudo systemctl enable --now apt-daily.timer apt-daily-upgrade.timer
+sudo unattended-upgrade -v          # apply pending security updates immediately
+```
+
+After runs, watch for kernel/glibc updates:
+
+```bash
+ls /var/run/reboot-required && cat /var/run/reboot-required.pkgs
+```
+
+If you want automatic reboots after kernel/glibc upgrades (default off — add explicitly):
+
+```conf
+# /etc/apt/apt.conf.d/50unattended-upgrades
+Unattended-Upgrade::Automatic-Reboot "true";
+```
+
 #### RHEL/CentOS/Fedora
 
 Use `dnf-automatic`:

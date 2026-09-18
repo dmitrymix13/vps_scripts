@@ -857,6 +857,9 @@ echo "== fail2ban =="
 sudo fail2ban-client status sshd
 echo "== kernel =="
 sudo sysctl net.ipv4.tcp_syncookies kernel.randomize_va_space fs.protected_symlinks net.ipv4.conf.all.rp_filter
+echo "== auto-update timers =="
+systemctl is-enabled apt-daily.timer apt-daily-upgrade.timer
+tail -3 /var/log/unattended-upgrades/unattended-upgrades.log
 ```
 
 Expected: `PermitRootLogin no`, `passwordauthentication no`, `authenticationmethods publickey`; UFW `Status: active`; fail2ban `Number of currently failed: 0`; sysctl values `1 / 2 / 1 / 1`.
